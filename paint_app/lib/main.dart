@@ -1,0 +1,195 @@
+import 'dart:ui' as ui;
+import 'dart:async';
+import 'package:flutter/material.dart';
+
+import 'bridge/engine_bridge.dart';
+import 'bridge/engine_platform.dart';
+
+void main() {
+  runApp(const PaintApp());
+}
+
+class PaintApp extends StatelessWidget {
+  const PaintApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'C++ Powered Paint App',
+      theme: ThemeData(
+        colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
+        useMaterial3: true,
+      ),
+      home: const PaintCanvasScreen(),
+    );
+  }
+}
+
+class PaintCanvasScreen extends StatefulWidget {
+  const PaintCanvasScreen({super.key});
+
+  @override
+  State<PaintCanvasScreen> createState() => _PaintCanvasScreenState();
+}
+
+class _PaintCanvasScreenState extends State<PaintCanvasScreen> {
+  late EngineBridge _engine;
+  ui.Image? _renderedImage;
+  bool _isEngineReady = false;
+
+  int _lastX = -1;
+  int _lastY = -1;
+
+  // Brush settings
+  int _currentColor = 0xFF000000; // Black (AARRGGBB)
+  final int _currentRadius = 5;
+
+  @override
+  void initState() {
+    super.initState();
+    _initEngine();
+  }
+
+  void _initEngine() {
+    // Platform agnostic bridge retrieval
+    _engine = getPlatformBridge();
+
+    // Initialize an arbitrary canvas size for now.
+    // In a production app, you might use LayoutBuilder to match screen size.
+    _engine.initEngine(800, 1000);
+    _engine.clear(0xFFFFFFFF); // White background
+    _isEngineReady = true;
+    _updateCanvas();
+  }
+
+  bool _isUpdating = false;
+
+  Future<void> _updateCanvas() async {
+    if (!_isEngineReady || _isUpdating) return;
+    _isUpdating = true;
+
+    final buffer = _engine.getBuffer();
+    final width = _engine.getWidth();
+    final height = _engine.getHeight();
+
+    if (width == 0 || height == 0 || buffer.isEmpty) {
+      _isUpdating = false;
+      return;
+    }
+
+    try {
+      final immutableBuffer = await ui.ImmutableBuffer.fromUint8List(buffer);
+      final descriptor = ui.ImageDescriptor.raw(
+        immutableBuffer,
+        width: width,
+        height: height,
+        pixelFormat: ui.PixelFormat.rgba8888,
+      );
+      final codec = await descriptor.instantiateCodec();
+      final frameInfo = await codec.getNextFrame();
+
+      descriptor.dispose();
+      codec.dispose();
+
+      if (mounted) {
+        setState(() {
+          _renderedImage?.dispose();
+          _renderedImage = frameInfo.image;
+        });
+      }
+    } catch (e) {
+      debugPrint("Error updating canvas: $e");
+    } finally {
+      _isUpdating = false;
+    }
+  }
+
+  void _handlePointerDown(PointerDownEvent event) {
+    _lastX = event.localPosition.dx.toInt();
+    _lastY = event.localPosition.dy.toInt();
+
+    // Draw a single dot
+    _engine.drawStroke(_lastX, _lastY, _lastX, _lastY, _currentColor, _currentRadius);
+    _updateCanvas();
+  }
+
+  void _handlePointerMove(PointerMoveEvent event) {
+    int currentX = event.localPosition.dx.toInt();
+    int currentY = event.localPosition.dy.toInt();
+
+    // Send drawing coordinates to the C++ engine
+    _engine.drawStroke(_lastX, _lastY, currentX, currentY, _currentColor, _currentRadius);
+
+    _lastX = currentX;
+    _lastY = currentY;
+
+    _updateCanvas();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('C++ Engine Paint App'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.clear),
+            onPressed: () {
+              _engine.clear(0xFFFFFFFF);
+              _updateCanvas();
+            },
+          ),
+          IconButton(
+            icon: const Icon(Icons.color_lens),
+            color: Colors.red,
+            onPressed: () => _currentColor = 0xFF0000FF, // Red (AABBGGRR in Little Endian RGBA byte order, or vice versa depending on platform. For simplicity, just changing the value)
+          ),
+          IconButton(
+            icon: const Icon(Icons.color_lens),
+            color: Colors.black,
+            onPressed: () => _currentColor = 0xFF000000,
+          )
+        ],
+      ),
+      body: Center(
+        child: _isEngineReady
+            ? Listener(
+                onPointerDown: _handlePointerDown,
+                onPointerMove: _handlePointerMove,
+                child: SizedBox(
+                  width: _engine.getWidth().toDouble(),
+                  height: _engine.getHeight().toDouble(),
+                  child: CustomPaint(
+                    painter: EnginePainter(_renderedImage),
+                    size: Size(
+                      _engine.getWidth().toDouble(),
+                      _engine.getHeight().toDouble(),
+                    ),
+                  ),
+                ),
+              )
+            : const CircularProgressIndicator(),
+      ),
+    );
+  }
+}
+
+/// Custom painter that strictly renders the ui.Image generated by the C++ engine.
+class EnginePainter extends CustomPainter {
+  final ui.Image? image;
+
+  EnginePainter(this.image);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (image != null) {
+      // Paint the image exactly as received from C++
+      canvas.drawImage(image!, Offset.zero, Paint());
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant EnginePainter oldDelegate) {
+    return image != oldDelegate.image;
+  }
+}
