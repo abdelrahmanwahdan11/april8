@@ -1,0 +1,6 @@
+# File: python_ai_agent/requirements.txt
+grpcio
+grpcio-tools
+opencv-python
+pydub
+numpy
