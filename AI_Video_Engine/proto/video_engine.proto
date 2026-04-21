@@ -1,0 +1,36 @@
+syntax = "proto3";
+
+package video_core;
+
+service EngineController {
+  rpc ExecutePlan(CorrectionPlan) returns (stream ExecutionProgress);
+}
+
+enum CommandType {
+  UNKNOWN = 0;
+  CUT_SEGMENT = 1;
+  STABILIZE = 2;
+  COLOR_CORRECT = 3;
+  AUDIO_DENOISE = 4;
+}
+
+message Command {
+  CommandType type = 1;
+  int32 start_time_ms = 2;
+  int32 end_time_ms = 3;
+  map<string, string> parameters = 4;
+}
+
+message CorrectionPlan {
+  string input_video_path = 1;
+  string output_video_path = 2;
+  repeated Command commands = 3;
+}
+
+message ExecutionProgress {
+  int32 progress_percentage = 1;
+  string current_task = 2;
+  bool is_finished = 3;
+  bool has_error = 4;
+  string error_details = 5;
+}
